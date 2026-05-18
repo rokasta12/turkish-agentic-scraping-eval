@@ -32,6 +32,8 @@ Current checks:
 - Tests bounded browser-agent guardrails.
 - Tests robust browser primitives: scroll before click, native input setter.
 - Runs a conservative Turkish website metadata discovery pass.
+- Builds a bounded same-domain frontier queue without fetching extra pages by default.
+- Tracks per-domain page budget and a simple safe-agent score.
 
 ## Requirements
 
@@ -141,6 +143,9 @@ It checks a seed list of public Turkish/Turkey-oriented sites, then extracts onl
 - lang
 - headings
 - internal link count
+- bounded same-domain frontier candidates
+- per-domain crawl budget
+- safe-agent score
 - RSS/sitemap hints
 - schema.org type hints
 - Turkish relevance score

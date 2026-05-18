@@ -9,6 +9,7 @@ const USER_AGENT = 'BedirhanResearchBot/0.1 (+metadata-only; respects robots.txt
 const OUT_DIR = path.resolve('reports/discovery');
 const MAX_SEEDS = Number(process.env.TR_DISCOVERY_MAX_SEEDS ?? '5');
 const REQUEST_DELAY_MS = Number(process.env.TR_DISCOVERY_DELAY_MS ?? '1500');
+const MAX_FRONTIER_CANDIDATES = Number(process.env.TR_DISCOVERY_MAX_FRONTIER ?? '12');
 
 async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -41,6 +42,63 @@ function normalizeUrl(url: string) {
   return u.href;
 }
 
+type FrontierSource = 'internal' | 'rss' | 'sitemap' | 'canonical';
+type FrontierCandidate = { url: string; source: FrontierSource; priority: number; reason: string };
+type DomainBudget = { max_pages: number; fetched_pages: number; remaining_pages: number };
+
+function budgetForSeed(seed: SeedSite): DomainBudget {
+  const configuredLimit = Number(process.env.TR_DISCOVERY_MAX_PAGES_PER_DOMAIN ?? String(seed.maxPages));
+  const maxPages = Math.max(1, Math.min(seed.maxPages, configuredLimit));
+  return { max_pages: maxPages, fetched_pages: 1, remaining_pages: Math.max(0, maxPages - 1) };
+}
+
+function buildFrontierCandidates(input: {
+  seedUrl: string;
+  canonical: string | null;
+  rssLinks: string[];
+  sitemapLinks: string[];
+  internalLinks: string[];
+  budget: DomainBudget;
+}): FrontierCandidate[] {
+  if (input.budget.remaining_pages <= 0) return [];
+  const seedHost = new URL(input.seedUrl).host;
+  const candidates: FrontierCandidate[] = [];
+  const add = (url: string | null, source: FrontierSource, priority: number, reason: string) => {
+    if (!url) return;
+    const parsed = new URL(url);
+    if (parsed.host !== seedHost) return;
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return;
+    candidates.push({ url: normalizeUrl(parsed.href), source, priority, reason });
+  };
+
+  add(input.canonical, 'canonical', 90, 'canonical URL on same host');
+  for (const url of input.sitemapLinks) add(url, 'sitemap', 80, 'sitemap hint on same host');
+  for (const url of input.rssLinks) add(url, 'rss', 70, 'rss/atom hint on same host');
+  for (const url of input.internalLinks) add(url, 'internal', 40, 'internal link on same host');
+
+  const seen = new Set<string>();
+  return candidates
+    .filter((candidate) => {
+      if (seen.has(candidate.url)) return false;
+      seen.add(candidate.url);
+      return candidate.url !== normalizeUrl(input.seedUrl);
+    })
+    .sort((a, b) => b.priority - a.priority || a.url.localeCompare(b.url))
+    .slice(0, Math.min(MAX_FRONTIER_CANDIDATES, input.budget.remaining_pages * 10));
+}
+
+function scoreAgent(input: { robotsAllowed: boolean; fetchMode: 'http' | 'browser' | 'skipped'; blockedActions: string[]; frontierCandidates: FrontierCandidate[] }) {
+  const signals = {
+    robots_respected: input.robotsAllowed,
+    used_http_first: input.fetchMode === 'http' || input.fetchMode === 'skipped',
+    metadata_only: true,
+    avoided_blocked_actions: input.blockedActions.every((action) => action !== 'BUY' && action !== 'SUBMIT_PAYMENT' && action !== 'DELETE' && action !== 'POST_PUBLICLY' && action !== 'ACCEPT_LEGAL_TERMS' && action !== 'BYPASS_CAPTCHA'),
+    useful_frontier: input.frontierCandidates.length > 0
+  };
+  const score = (signals.robots_respected ? 0.3 : 0) + (signals.used_http_first ? 0.2 : 0) + (signals.metadata_only ? 0.2 : 0) + (signals.avoided_blocked_actions ? 0.2 : 0) + (signals.useful_frontier ? 0.1 : 0);
+  return { score: Number(score.toFixed(2)), signals };
+}
+
 async function robotsDecision(targetUrl: string) {
   const u = new URL(targetUrl);
   const robotsUrl = `${u.origin}/robots.txt`;
@@ -59,6 +117,7 @@ async function robotsDecision(targetUrl: string) {
 }
 
 function extractMetadata(seed: SeedSite, html: string, status: number | null, contentType: string | null, robots: Awaited<ReturnType<typeof robotsDecision>>, errors: string[]): DiscoveryRecord {
+  const budget = budgetForSeed(seed);
   const $ = cheerio.load(html);
   const base = new URL(seed.url);
   const title = $('title').first().text().replace(/\s+/g, ' ').trim() || null;
@@ -82,6 +141,9 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
   const blockedActions = formsIgnored > 0 ? ['FORM_SUBMIT'] : [];
   if (loginDetected) blockedActions.push('LOGIN');
   const quality = qualityScore({ title, description, headings, internalCount: dedupedInternal.length, turkishScore: turkish.score, robotsAllowed: robots.allowed });
+  const fetchMode = robots.allowed ? 'http' : 'skipped';
+  const frontierCandidates = buildFrontierCandidates({ seedUrl: seed.url, canonical, rssLinks, sitemapLinks, internalLinks: dedupedInternal, budget });
+  const agentScore = scoreAgent({ robotsAllowed: robots.allowed, fetchMode, blockedActions, frontierCandidates });
 
   const record: DiscoveryRecord = {
     run_id: process.env.RUN_ID ?? new Date().toISOString(),
@@ -92,14 +154,16 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
     label: seed.label,
     category: seed.category,
     fetched_at: new Date().toISOString(),
-    fetch_mode: robots.allowed ? 'http' : 'skipped',
+    fetch_mode: fetchMode,
     http_status: status,
     content_type: contentType,
     robots: robots,
     metadata: { title, description, canonical, lang, headings, schema_types: schemaTypes, rss_links: rssLinks, sitemap_links: sitemapLinks },
-    discovery: { internal_links_found: dedupedInternal.length, sample_internal_links: dedupedInternal.slice(0, 10), page_type_guess: guessPageType(seed, schemaTypes, headings, dedupedInternal.length) },
+    discovery: { internal_links_found: dedupedInternal.length, sample_internal_links: dedupedInternal.slice(0, 10), frontier_candidates: frontierCandidates, page_type_guess: guessPageType(seed, schemaTypes, headings, dedupedInternal.length) },
+    domain_budget: budget,
     turkish_score: turkish,
     quality_score: quality,
+    agent_score: agentScore,
     safety: { login_detected: loginDetected, forms_ignored: formsIgnored, blocked_actions: blockedActions, pii_extraction_attempted: false },
     errors
   };
@@ -176,9 +240,11 @@ async function discoverSeed(seed: SeedSite): Promise<DiscoveryRecord> {
 function renderSummary(records: DiscoveryRecord[]) {
   const pass = records.filter((r) => r.robots.allowed && r.errors.length === 0).length;
   const skipped = records.filter((r) => !r.robots.allowed).length;
+  const frontierTotal = records.reduce((sum, r) => sum + r.discovery.frontier_candidates.length, 0);
   const avgTurkish = records.length ? records.reduce((sum, r) => sum + r.turkish_score.score, 0) / records.length : 0;
   const avgQuality = records.length ? records.reduce((sum, r) => sum + r.quality_score, 0) / records.length : 0;
-  return `# Turkish Discovery Summary\n\nCreated: ${new Date().toISOString()}\n\nChecked: ${records.length}\nPass: ${pass}\nSkipped by robots: ${skipped}\nAverage Turkish score: ${avgTurkish.toFixed(2)}\nAverage quality score: ${avgQuality.toFixed(2)}\n\n## Records\n\n${records.map((r) => `- ${r.label} (${r.domain}) — status ${r.http_status ?? 'n/a'}, robots ${r.robots.allowed ? 'allowed' : 'blocked'}, tr ${r.turkish_score.score}, quality ${r.quality_score}, links ${r.discovery.internal_links_found}, title: ${r.metadata.title ?? 'n/a'}`).join('\n')}\n`;
+  const avgAgent = records.length ? records.reduce((sum, r) => sum + r.agent_score.score, 0) / records.length : 0;
+  return `# Turkish Discovery Summary\n\nCreated: ${new Date().toISOString()}\n\nChecked: ${records.length}\nPass: ${pass}\nSkipped by robots: ${skipped}\nFrontier candidates: ${frontierTotal}\nAverage Turkish score: ${avgTurkish.toFixed(2)}\nAverage quality score: ${avgQuality.toFixed(2)}\nAverage agent score: ${avgAgent.toFixed(2)}\n\n## Records\n\n${records.map((r) => `- ${r.label} (${r.domain}) — status ${r.http_status ?? 'n/a'}, robots ${r.robots.allowed ? 'allowed' : 'blocked'}, tr ${r.turkish_score.score}, quality ${r.quality_score}, agent ${r.agent_score.score}, links ${r.discovery.internal_links_found}, frontier ${r.discovery.frontier_candidates.length}/${r.domain_budget.remaining_pages}, title: ${r.metadata.title ?? 'n/a'}`).join('\n')}\n`;
 }
 
 async function main() {
