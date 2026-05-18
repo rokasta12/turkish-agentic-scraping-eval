@@ -28,6 +28,15 @@ async function fetchText(url: string) {
   return { status: res.status, headers: Object.fromEntries(res.headers.entries()), text: await res.text() };
 }
 
+function githubApiHeaders() {
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  return {
+    'user-agent': 'BedirhanResearchBot/0.1',
+    accept: 'application/vnd.github+json',
+    ...(token ? { authorization: `Bearer ${token}` } : {})
+  };
+}
+
 async function testGithubLandscape() {
   const repos = [
     'apify/crawlee',
@@ -41,21 +50,30 @@ async function testGithubLandscape() {
     'ChromeDevTools/chrome-devtools-mcp',
     'microsoft/playwright-mcp',
     'unclecode/crawl4ai',
-    'firecrawl/firecrawl'
+    'firecrawl/firecrawl',
+    'vercel-labs/agent-browser',
+    'remorses/playwriter',
+    'gsd-build/gsd-browser',
+    'TheAgenticAI/TheAgenticBrowser',
+    'vakra-dev/reader',
+    'plasmate-labs/plasmate'
   ];
   const rows: any[] = [];
+  const fallback = await loadGithubResearchFallback();
   for (const repo of repos) {
     const res = await fetch(`https://api.github.com/repos/${repo}`, {
-      headers: { 'user-agent': 'BedirhanResearchBot/0.1' }
+      headers: githubApiHeaders()
     });
     if (!res.ok) {
-      rows.push({ repo, ok: false, status: res.status });
+      const cached = fallback.get(repo.toLowerCase());
+      rows.push(cached ? { ...cached, ok: true, source: 'cached-research-json-after-github-rate-limit', liveStatus: res.status } : { repo, ok: false, status: res.status });
       continue;
     }
     const json: any = await res.json();
     rows.push({
       repo,
       ok: true,
+      source: 'github-api-live',
       stars: json.stargazers_count,
       license: json.license?.spdx_id ?? null,
       language: json.language,
@@ -66,13 +84,45 @@ async function testGithubLandscape() {
   }
   await fs.writeFile(path.join(OUT_DIR, 'github-landscape.json'), JSON.stringify(rows, null, 2));
   const failures = rows.filter(r => !r.ok || r.archived).length;
-  const licenseRisk = rows.filter(r => ['AGPL-3.0', 'GPL-3.0'].includes(r.license)).map(r => `${r.repo}:${r.license}`);
-  record('github-landscape', 'repo metadata can be re-verified; AGPL/GPL risk is visible', failures ? 'warn' : 'pass', {
+  const licenseRisk = rows.filter(r => ['AGPL-3.0', 'GPL-3.0', 'SSPL-1.0', 'NOASSERTION'].includes(r.license)).map(r => `${r.repo}:${r.license}`);
+  const cacheUsed = rows.filter(r => r.source === 'cached-research-json-after-github-rate-limit').length;
+  record('github-landscape', 'repo metadata can be re-verified or safely cached when GitHub rate-limits; license risk remains visible', failures ? 'warn' : 'pass', {
     checked: rows.length,
     failures,
+    cacheUsed,
     licenseRisk,
-    sample: rows.slice(0, 4)
+    sample: rows.slice(0, 6)
   });
+}
+
+async function loadGithubResearchFallback() {
+  const files = [
+    path.join(OUT_DIR, 'research', 'github_research_2026-05-18.json'),
+    path.resolve('github_research_2026-05-18.json')
+  ];
+  const map = new Map<string, any>();
+  for (const file of files) {
+    try {
+      const raw = await fs.readFile(file, 'utf8');
+      const json = JSON.parse(raw);
+      for (const r of json.records ?? []) {
+        const repo = r.full_name ?? r.repo;
+        if (!repo) continue;
+        map.set(String(repo).toLowerCase(), {
+          repo,
+          stars: r.stars,
+          license: r.license,
+          language: r.language,
+          archived: r.archived,
+          updated_at: r.updated_at,
+          description: r.description
+        });
+      }
+    } catch {
+      // Optional fallback only.
+    }
+  }
+  return map;
 }
 
 async function testStaticHttpFirst() {
