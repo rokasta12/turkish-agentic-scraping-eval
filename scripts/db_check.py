@@ -161,6 +161,7 @@ def summarize(con: sqlite3.Connection, run_id: str, discovery_rows: list[dict]) 
     frontier_count = sum(len(row.get("discovery", {}).get("frontier_candidates", [])) for row in discovery_rows)
     fetch_attempt_count = sum(len(row.get("discovery", {}).get("fetch_attempts", [])) for row in discovery_rows)
     fallback_success_count = sum(1 for row in discovery_rows if row.get("discovery", {}).get("fetched_url") and row.get("discovery", {}).get("fetched_url") != row.get("url"))
+    avg_quality = sum(float(row.get("quality_score", 0)) for row in discovery_rows) / total_discovery if total_discovery else 0
     avg_agent = sum(float(row.get("agent_score", {}).get("score", 0)) for row in discovery_rows) / total_discovery if total_discovery else 0
     historical_runs = con.execute("select count(*) from eval_runs").fetchone()[0]
 
@@ -177,6 +178,7 @@ def summarize(con: sqlite3.Connection, run_id: str, discovery_rows: list[dict]) 
         "frontier_candidates": frontier_count,
         "fetch_attempts": fetch_attempt_count,
         "fallback_successes": fallback_success_count,
+        "average_quality_score": round(avg_quality, 2),
         "average_agent_score": round(avg_agent, 2),
         "historical_eval_runs": historical_runs,
     }

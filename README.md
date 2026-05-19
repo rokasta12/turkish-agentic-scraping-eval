@@ -75,7 +75,7 @@ npm test
 - `npm run typecheck` — TypeScript type check.
 - `npm run eval` — run executable research evals.
 - `npm run discover:tr` — run safe Turkish website metadata discovery.
-- `npm run db:check` — ingest latest reports into a local SQLite health database and fail on unsafe/failing state.
+- `npm run db:check` — ingest latest reports into a local SQLite health database, print run health metrics including average quality/safe-agent scores, and fail on unsafe/failing state.
 - `npm test` — typecheck + eval + discovery + database check.
 
 ## Generated outputs
