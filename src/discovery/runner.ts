@@ -35,6 +35,11 @@ async function fetchText(url: string, timeoutMs = 15000) {
   }
 }
 
+function describeFetchError(error: unknown, timeoutMs: number) {
+  if (error instanceof Error && error.name === 'AbortError') return `timeout_after_${timeoutMs}ms`;
+  return String(error).slice(0, 160);
+}
+
 function normalizeUrl(url: string) {
   const u = new URL(url);
   u.hash = '';
@@ -125,7 +130,7 @@ async function robotsDecision(targetUrl: string) {
     const allowed = parser.isAllowed(targetUrl, USER_AGENT) !== false;
     return { checked: true, allowed, robots_url: robotsUrl, reason: allowed ? null : 'robots_disallow' };
   } catch (error) {
-    return { checked: true, allowed: true, robots_url: robotsUrl, reason: `robots_fetch_error:${String(error).slice(0, 120)}` };
+    return { checked: true, allowed: true, robots_url: robotsUrl, reason: `robots_fetch_error:${describeFetchError(error, 10000)}` };
   }
 }
 
@@ -251,7 +256,7 @@ async function tryFetch(url: string, timeoutMs: number): Promise<{ fetched: Awai
   } catch (error) {
     return {
       fetched: null,
-      attempt: { url, ok: false, status: null, content_type: null, error: String(error).slice(0, 160) }
+      attempt: { url, ok: false, status: null, content_type: null, error: describeFetchError(error, timeoutMs) }
     };
   }
 }
