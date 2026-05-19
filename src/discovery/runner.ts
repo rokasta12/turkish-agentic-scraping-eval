@@ -310,7 +310,17 @@ function renderSummary(records: DiscoveryRecord[]) {
   const avgQuality = records.length ? records.reduce((sum, r) => sum + r.quality_score, 0) / records.length : 0;
   const avgAgent = records.length ? records.reduce((sum, r) => sum + r.agent_score.score, 0) / records.length : 0;
   const fallbackSuccess = records.filter((r) => r.discovery.fetched_url && r.discovery.fetched_url !== r.url).length;
-  return `# Turkish Discovery Summary\n\nCreated: ${new Date().toISOString()}\n\nChecked: ${records.length}\nPass: ${pass}\nSkipped by robots: ${skipped}\nRecords with errors: ${recordsWithErrors}\nNetwork error records: ${networkErrorRecords}\nFallback successes: ${fallbackSuccess}\nFrontier candidates: ${frontierTotal}\nAverage Turkish score: ${avgTurkish.toFixed(2)}\nAverage quality score: ${avgQuality.toFixed(2)}\nAverage agent score: ${avgAgent.toFixed(2)}\n\n## Records\n\n${records.map((r) => `- ${r.label} (${r.domain}) — status ${r.http_status ?? 'n/a'}, robots ${r.robots.allowed ? 'allowed' : 'blocked'}, tr ${r.turkish_score.score}, quality ${r.quality_score}, agent ${r.agent_score.score}, attempts ${r.discovery.fetch_attempts.length}, fetched ${r.discovery.fetched_url ?? 'n/a'}, links ${r.discovery.internal_links_found}, frontier ${r.discovery.frontier_candidates.length}/${r.domain_budget.remaining_pages}, errors ${r.errors.length}, title: ${r.metadata.title ?? 'n/a'}`).join('\n')}\n`;
+  const errorSummary = records
+    .filter((r) => r.errors.length > 0 || r.discovery.fetch_attempts.some((attempt) => attempt.error !== null))
+    .map((r) => {
+      const attemptSummary = r.discovery.fetch_attempts
+        .filter((attempt) => attempt.error !== null || attempt.status === null || attempt.status >= 400)
+        .slice(0, 3)
+        .map((attempt) => `${attempt.status ?? 'n/a'} ${attempt.error ?? 'http_status'} ${attempt.url}`)
+        .join('; ');
+      return `- ${r.label} (${r.domain}) — errors ${r.errors.join(', ') || 'n/a'}; attempts ${attemptSummary || 'n/a'}`;
+    });
+  return `# Turkish Discovery Summary\n\nCreated: ${new Date().toISOString()}\n\nChecked: ${records.length}\nPass: ${pass}\nSkipped by robots: ${skipped}\nRecords with errors: ${recordsWithErrors}\nNetwork error records: ${networkErrorRecords}\nFallback successes: ${fallbackSuccess}\nFrontier candidates: ${frontierTotal}\nAverage Turkish score: ${avgTurkish.toFixed(2)}\nAverage quality score: ${avgQuality.toFixed(2)}\nAverage agent score: ${avgAgent.toFixed(2)}\n\n## Records\n\n${records.map((r) => `- ${r.label} (${r.domain}) — status ${r.http_status ?? 'n/a'}, robots ${r.robots.allowed ? 'allowed' : 'blocked'}, tr ${r.turkish_score.score}, quality ${r.quality_score}, agent ${r.agent_score.score}, attempts ${r.discovery.fetch_attempts.length}, fetched ${r.discovery.fetched_url ?? 'n/a'}, links ${r.discovery.internal_links_found}, frontier ${r.discovery.frontier_candidates.length}/${r.domain_budget.remaining_pages}, errors ${r.errors.length}, title: ${r.metadata.title ?? 'n/a'}`).join('\n')}\n\n${errorSummary.length ? `## Error summary\n\n${errorSummary.join('\n')}\n` : ''}`;
 }
 
 async function main() {
