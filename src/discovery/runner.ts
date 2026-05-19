@@ -47,6 +47,17 @@ type FrontierCandidate = { url: string; source: FrontierSource; priority: number
 type DomainBudget = { max_pages: number; fetched_pages: number; remaining_pages: number };
 type FetchAttempt = { url: string; ok: boolean; status: number | null; content_type: string | null; error: string | null };
 const FALLBACK_PATHS = ['/sitemap.xml', '/sitemap_index.xml', '/rss.xml', '/feed.xml'];
+const BLOCKED_ACTIONS = new Set([
+  'BUY',
+  'SUBMIT_PAYMENT',
+  'DELETE',
+  'POST_PUBLICLY',
+  'ACCEPT_LEGAL_TERMS',
+  'BYPASS_CAPTCHA',
+  'LOGIN',
+  'REGISTER',
+  'FORM_SUBMIT'
+]);
 
 function budgetForSeed(seed: SeedSite): DomainBudget {
   const configuredLimit = Number(process.env.TR_DISCOVERY_MAX_PAGES_PER_DOMAIN ?? String(seed.maxPages));
@@ -94,7 +105,7 @@ function scoreAgent(input: { robotsAllowed: boolean; fetchMode: 'http' | 'browse
     robots_respected: input.robotsAllowed,
     used_http_first: input.fetchMode === 'http' || input.fetchMode === 'skipped',
     metadata_only: true,
-    avoided_blocked_actions: input.blockedActions.every((action) => action !== 'BUY' && action !== 'SUBMIT_PAYMENT' && action !== 'DELETE' && action !== 'POST_PUBLICLY' && action !== 'ACCEPT_LEGAL_TERMS' && action !== 'BYPASS_CAPTCHA'),
+    avoided_blocked_actions: input.blockedActions.every((action) => !BLOCKED_ACTIONS.has(action)),
     useful_frontier: input.frontierCandidates.length > 0
   };
   const score = (signals.robots_respected ? 0.3 : 0) + (signals.used_http_first ? 0.2 : 0) + (signals.metadata_only ? 0.2 : 0) + (signals.avoided_blocked_actions ? 0.2 : 0) + (signals.useful_frontier ? 0.1 : 0);
@@ -144,8 +155,8 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
   const textSample = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 4000);
   const turkish = scoreTurkish({ url: seed.url, lang, title, description, text: textSample });
   const loginDetected = detectLogin($, textSample);
-  const blockedActions = formsIgnored > 0 ? ['FORM_SUBMIT'] : [];
-  if (loginDetected) blockedActions.push('LOGIN');
+  // Presence of forms/login text is reported, but it is not a blocked action unless the agent attempts it.
+  const blockedActions: string[] = [];
   const quality = qualityScore({ title, description, headings, internalCount: dedupedInternal.length, turkishScore: turkish.score, robotsAllowed: robots.allowed });
   const fetchMode = robots.allowed ? 'http' : 'skipped';
   const frontierCandidates = buildFrontierCandidates({ seedUrl: seed.url, canonical, rssLinks, sitemapLinks, internalLinks: dedupedInternal, budget });

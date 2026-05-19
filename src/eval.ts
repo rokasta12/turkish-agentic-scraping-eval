@@ -226,7 +226,7 @@ async function testStructuredExtractionValidation() {
 }
 
 function isAllowedAction(action: { type: string; url?: string }, allowedHosts: string[]) {
-  const dangerous = ['BUY', 'SUBMIT_PAYMENT', 'DELETE', 'POST_PUBLICLY', 'ACCEPT_LEGAL_TERMS', 'BYPASS_CAPTCHA'];
+  const dangerous = ['BUY', 'SUBMIT_PAYMENT', 'DELETE', 'POST_PUBLICLY', 'ACCEPT_LEGAL_TERMS', 'BYPASS_CAPTCHA', 'LOGIN', 'REGISTER', 'FORM_SUBMIT'];
   if (dangerous.includes(action.type)) return { ok: false, reason: 'dangerous_action' };
   if (action.url) {
     const host = new URL(action.url).host;
@@ -240,11 +240,13 @@ async function testBoundedAgentGuardrails() {
     { type: 'OPEN_ALLOWED_URL', url: 'https://books.toscrape.com/' },
     { type: 'CLICK' },
     { type: 'DELETE', url: 'https://books.toscrape.com/admin/item/1' },
+    { type: 'LOGIN', url: 'https://books.toscrape.com/accounts/login' },
+    { type: 'FORM_SUBMIT', url: 'https://books.toscrape.com/search' },
     { type: 'OPEN_ALLOWED_URL', url: 'https://evil.example/' }
   ];
   const decisions = actions.map(a => ({ action: a, decision: isAllowedAction(a, ['books.toscrape.com']) }));
   const blocked = decisions.filter(d => !d.decision.ok).length;
-  record('bounded-agent-guardrails', 'agentic browser must be a bounded state machine with allowlist and destructive-action blocks', blocked === 2 ? 'pass' : 'fail', { decisions });
+  record('bounded-agent-guardrails', 'agentic browser must be a bounded state machine with allowlist and destructive-action blocks', blocked === 4 ? 'pass' : 'fail', { decisions });
 }
 
 async function testScrollAndNativeSetter() {
