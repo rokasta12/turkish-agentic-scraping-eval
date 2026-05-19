@@ -28,6 +28,23 @@ async function fetchText(url: string) {
   return { status: res.status, headers: Object.fromEntries(res.headers.entries()), text: await res.text() };
 }
 
+async function fetchGithubRepo(repo: string) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}`, {
+      signal: controller.signal,
+      headers: githubApiHeaders()
+    });
+    if (!res.ok) return { ok: false as const, status: res.status, error: null, json: null };
+    return { ok: true as const, status: res.status, error: null, json: await res.json() as any };
+  } catch (err) {
+    return { ok: false as const, status: null, error: err instanceof Error ? err.message : String(err), json: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function githubApiHeaders() {
   const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
   return {
@@ -61,15 +78,15 @@ async function testGithubLandscape() {
   const rows: any[] = [];
   const fallback = await loadGithubResearchFallback();
   for (const repo of repos) {
-    const res = await fetch(`https://api.github.com/repos/${repo}`, {
-      headers: githubApiHeaders()
-    });
+    const res = await fetchGithubRepo(repo);
     if (!res.ok) {
       const cached = fallback.get(repo.toLowerCase());
-      rows.push(cached ? { ...cached, ok: true, source: 'cached-research-json-after-github-rate-limit', liveStatus: res.status } : { repo, ok: false, status: res.status });
+      rows.push(cached
+        ? { ...cached, ok: true, source: 'cached-research-json-after-github-unavailable', liveStatus: res.status, liveError: res.error }
+        : { repo, ok: false, status: res.status, error: res.error });
       continue;
     }
-    const json: any = await res.json();
+    const json = res.json;
     rows.push({
       repo,
       ok: true,
@@ -85,8 +102,8 @@ async function testGithubLandscape() {
   await fs.writeFile(path.join(OUT_DIR, 'github-landscape.json'), JSON.stringify(rows, null, 2));
   const failures = rows.filter(r => !r.ok || r.archived).length;
   const licenseRisk = rows.filter(r => ['AGPL-3.0', 'GPL-3.0', 'SSPL-1.0', 'NOASSERTION'].includes(r.license)).map(r => `${r.repo}:${r.license}`);
-  const cacheUsed = rows.filter(r => r.source === 'cached-research-json-after-github-rate-limit').length;
-  record('github-landscape', 'repo metadata can be re-verified or safely cached when GitHub rate-limits; license risk remains visible', failures ? 'warn' : 'pass', {
+  const cacheUsed = rows.filter(r => r.source === 'cached-research-json-after-github-unavailable').length;
+  record('github-landscape', 'repo metadata can be re-verified or safely cached when GitHub is rate-limited or temporarily unavailable; license risk remains visible', failures ? 'warn' : 'pass', {
     checked: rows.length,
     failures,
     cacheUsed,
