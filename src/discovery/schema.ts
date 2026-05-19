@@ -29,6 +29,14 @@ export const DiscoveryRecordSchema = z.object({
     sitemap_links: z.array(z.string())
   }),
   discovery: z.object({
+    fetched_url: z.string().url().nullable(),
+    fetch_attempts: z.array(z.object({
+      url: z.string().url(),
+      ok: z.boolean(),
+      status: z.number().nullable(),
+      content_type: z.string().nullable(),
+      error: z.string().nullable()
+    })),
     internal_links_found: z.number(),
     sample_internal_links: z.array(z.string()),
     frontier_candidates: z.array(z.object({

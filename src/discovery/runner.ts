@@ -45,6 +45,8 @@ function normalizeUrl(url: string) {
 type FrontierSource = 'internal' | 'rss' | 'sitemap' | 'canonical';
 type FrontierCandidate = { url: string; source: FrontierSource; priority: number; reason: string };
 type DomainBudget = { max_pages: number; fetched_pages: number; remaining_pages: number };
+type FetchAttempt = { url: string; ok: boolean; status: number | null; content_type: string | null; error: string | null };
+const FALLBACK_PATHS = ['/sitemap.xml', '/sitemap_index.xml', '/rss.xml', '/feed.xml'];
 
 function budgetForSeed(seed: SeedSite): DomainBudget {
   const configuredLimit = Number(process.env.TR_DISCOVERY_MAX_PAGES_PER_DOMAIN ?? String(seed.maxPages));
@@ -116,7 +118,7 @@ async function robotsDecision(targetUrl: string) {
   }
 }
 
-function extractMetadata(seed: SeedSite, html: string, status: number | null, contentType: string | null, robots: Awaited<ReturnType<typeof robotsDecision>>, errors: string[]): DiscoveryRecord {
+function extractMetadata(seed: SeedSite, html: string, status: number | null, contentType: string | null, robots: Awaited<ReturnType<typeof robotsDecision>>, errors: string[], fetchedUrl: string | null = null, fetchAttempts: FetchAttempt[] = []): DiscoveryRecord {
   const budget = budgetForSeed(seed);
   const $ = cheerio.load(html);
   const base = new URL(seed.url);
@@ -128,7 +130,11 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
   const headings = $('h1,h2').slice(0, 12).map((_, el) => $(el).text().replace(/\s+/g, ' ').trim()).get().filter(Boolean);
   const schemaTypes = $('[type="application/ld+json"]').map((_, el) => parseSchemaTypes($(el).text())).get().flat().slice(0, 20);
   const rssLinks = $('link[type="application/rss+xml"],link[type="application/atom+xml"]').map((_, el) => safeUrl($(el).attr('href') || '', seed.url)).get().filter(Boolean).slice(0, 10);
-  const sitemapLinks = $('a[href*="sitemap"],link[href*="sitemap"]').map((_, el) => safeUrl($(el).attr('href') || '', seed.url)).get().filter(Boolean).slice(0, 10);
+  const xmlLocLinks = $('loc').map((_, el) => safeUrl($(el).text().trim(), seed.url)).get().filter(Boolean);
+  const sitemapLinks = [
+    ...$('a[href*="sitemap"],link[href*="sitemap"]').map((_, el) => safeUrl($(el).attr('href') || '', seed.url)).get().filter(Boolean),
+    ...xmlLocLinks
+  ].slice(0, 10);
   const internalLinks = $('a[href]').map((_, el) => safeUrl($(el).attr('href') || '', seed.url)).get()
     .filter((href): href is string => Boolean(href))
     .filter((href) => new URL(href).host === base.host)
@@ -159,7 +165,7 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
     content_type: contentType,
     robots: robots,
     metadata: { title, description, canonical, lang, headings, schema_types: schemaTypes, rss_links: rssLinks, sitemap_links: sitemapLinks },
-    discovery: { internal_links_found: dedupedInternal.length, sample_internal_links: dedupedInternal.slice(0, 10), frontier_candidates: frontierCandidates, page_type_guess: guessPageType(seed, schemaTypes, headings, dedupedInternal.length) },
+    discovery: { fetched_url: fetchedUrl, fetch_attempts: fetchAttempts, internal_links_found: dedupedInternal.length, sample_internal_links: dedupedInternal.slice(0, 10), frontier_candidates: frontierCandidates, page_type_guess: guessPageType(seed, schemaTypes, headings, dedupedInternal.length) },
     domain_budget: budget,
     turkish_score: turkish,
     quality_score: quality,
@@ -219,22 +225,68 @@ function guessPageType(seed: SeedSite, schemaTypes: string[], headings: string[]
   return 'unknown';
 }
 
+function fallbackUrls(seedUrl: string) {
+  const origin = new URL(seedUrl).origin;
+  return FALLBACK_PATHS.map((p) => normalizeUrl(new URL(p, origin).href));
+}
+
+async function tryFetch(url: string, timeoutMs: number): Promise<{ fetched: Awaited<ReturnType<typeof fetchText>> | null; attempt: FetchAttempt }> {
+  try {
+    const fetched = await fetchText(url, timeoutMs);
+    return {
+      fetched,
+      attempt: { url, ok: fetched.ok, status: fetched.status, content_type: fetched.contentType, error: null }
+    };
+  } catch (error) {
+    return {
+      fetched: null,
+      attempt: { url, ok: false, status: null, content_type: null, error: String(error).slice(0, 160) }
+    };
+  }
+}
+
+async function fetchWithSafeFallback(seed: SeedSite, primaryRobots: Awaited<ReturnType<typeof robotsDecision>>) {
+  const attempts: FetchAttempt[] = [];
+  const primary = await tryFetch(seed.url, 15000);
+  attempts.push(primary.attempt);
+  if (primary.fetched?.ok) {
+    return { fetched: primary.fetched, fetchedUrl: seed.url, attempts, errors: [] as string[] };
+  }
+
+  for (const url of fallbackUrls(seed.url)) {
+    const fallbackRobots = await robotsDecision(url);
+    if (!fallbackRobots.allowed) {
+      attempts.push({ url, ok: false, status: null, content_type: null, error: 'skipped_by_robots' });
+      continue;
+    }
+    const result = await tryFetch(url, 8000);
+    attempts.push(result.attempt);
+    if (result.fetched?.ok) {
+      return { fetched: result.fetched, fetchedUrl: url, attempts, errors: [] as string[] };
+    }
+  }
+
+  const finalError = primary.attempt.error ?? `http_status:${primary.attempt.status ?? 'unknown'}`;
+  const robotsReason = primaryRobots.reason ? [`robots:${primaryRobots.reason}`] : [];
+  return { fetched: null, fetchedUrl: null, attempts, errors: [...robotsReason, finalError] };
+}
+
 async function discoverSeed(seed: SeedSite): Promise<DiscoveryRecord> {
-  const errors: string[] = [];
   const robots = await robotsDecision(seed.url);
   if (!robots.allowed) {
-    return extractMetadata(seed, '', null, null, robots, ['skipped_by_robots']);
+    return extractMetadata(seed, '', null, null, robots, ['skipped_by_robots'], null, []);
   }
-  try {
-    const fetched = await fetchText(seed.url);
-    if (!fetched.contentType?.includes('html') && !fetched.contentType?.includes('text')) {
-      errors.push(`unexpected_content_type:${fetched.contentType}`);
-    }
-    return extractMetadata(seed, fetched.text.slice(0, 2_000_000), fetched.status, fetched.contentType, robots, errors);
-  } catch (error) {
-    errors.push(String(error).slice(0, 200));
-    return extractMetadata(seed, '', null, null, robots, errors);
+
+  const result = await fetchWithSafeFallback(seed, robots);
+  if (!result.fetched) {
+    return extractMetadata(seed, '', null, null, robots, result.errors, null, result.attempts);
   }
+
+  const errors: string[] = [...result.errors];
+  if (!result.fetched.contentType?.includes('html') && !result.fetched.contentType?.includes('text') && !result.fetched.contentType?.includes('xml')) {
+    errors.push(`unexpected_content_type:${result.fetched.contentType}`);
+  }
+  return extractMetadata(seed, result.fetched.text.slice(0, 2_000_000), result.fetched.status, result.fetched.contentType, robots, errors, result.fetchedUrl, result.attempts);
 }
 
 function renderSummary(records: DiscoveryRecord[]) {
@@ -244,7 +296,8 @@ function renderSummary(records: DiscoveryRecord[]) {
   const avgTurkish = records.length ? records.reduce((sum, r) => sum + r.turkish_score.score, 0) / records.length : 0;
   const avgQuality = records.length ? records.reduce((sum, r) => sum + r.quality_score, 0) / records.length : 0;
   const avgAgent = records.length ? records.reduce((sum, r) => sum + r.agent_score.score, 0) / records.length : 0;
-  return `# Turkish Discovery Summary\n\nCreated: ${new Date().toISOString()}\n\nChecked: ${records.length}\nPass: ${pass}\nSkipped by robots: ${skipped}\nFrontier candidates: ${frontierTotal}\nAverage Turkish score: ${avgTurkish.toFixed(2)}\nAverage quality score: ${avgQuality.toFixed(2)}\nAverage agent score: ${avgAgent.toFixed(2)}\n\n## Records\n\n${records.map((r) => `- ${r.label} (${r.domain}) — status ${r.http_status ?? 'n/a'}, robots ${r.robots.allowed ? 'allowed' : 'blocked'}, tr ${r.turkish_score.score}, quality ${r.quality_score}, agent ${r.agent_score.score}, links ${r.discovery.internal_links_found}, frontier ${r.discovery.frontier_candidates.length}/${r.domain_budget.remaining_pages}, title: ${r.metadata.title ?? 'n/a'}`).join('\n')}\n`;
+  const fallbackSuccess = records.filter((r) => r.discovery.fetched_url && r.discovery.fetched_url !== r.url).length;
+  return `# Turkish Discovery Summary\n\nCreated: ${new Date().toISOString()}\n\nChecked: ${records.length}\nPass: ${pass}\nSkipped by robots: ${skipped}\nFallback successes: ${fallbackSuccess}\nFrontier candidates: ${frontierTotal}\nAverage Turkish score: ${avgTurkish.toFixed(2)}\nAverage quality score: ${avgQuality.toFixed(2)}\nAverage agent score: ${avgAgent.toFixed(2)}\n\n## Records\n\n${records.map((r) => `- ${r.label} (${r.domain}) — status ${r.http_status ?? 'n/a'}, robots ${r.robots.allowed ? 'allowed' : 'blocked'}, tr ${r.turkish_score.score}, quality ${r.quality_score}, agent ${r.agent_score.score}, attempts ${r.discovery.fetch_attempts.length}, fetched ${r.discovery.fetched_url ?? 'n/a'}, links ${r.discovery.internal_links_found}, frontier ${r.discovery.frontier_candidates.length}/${r.domain_budget.remaining_pages}, title: ${r.metadata.title ?? 'n/a'}`).join('\n')}\n`;
 }
 
 async function main() {

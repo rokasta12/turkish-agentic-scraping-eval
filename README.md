@@ -33,6 +33,7 @@ Current checks:
 - Tests robust browser primitives: scroll before click, native input setter.
 - Runs a conservative Turkish website metadata discovery pass.
 - Builds a bounded same-domain frontier queue without fetching extra pages by default.
+- Records fetch attempts and tries safe sitemap/RSS fallback URLs when the homepage times out.
 - Tracks per-domain page budget and a simple safe-agent score.
 
 ## Requirements
@@ -147,6 +148,7 @@ It checks a seed list of public Turkish/Turkey-oriented sites, then extracts onl
 - headings
 - internal link count
 - bounded same-domain frontier candidates
+- fetch attempt diagnostics and safe sitemap/RSS fallback attempts
 - per-domain crawl budget
 - safe-agent score
 - RSS/sitemap hints

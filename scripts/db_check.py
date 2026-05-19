@@ -71,6 +71,9 @@ def connect() -> sqlite3.Connection:
           robots_allowed integer not null,
           quality_score real not null,
           agent_score real not null,
+          fetched_url text,
+          fetch_attempt_count integer not null default 0,
+          fallback_success integer not null default 0,
           frontier_count integer not null,
           blocked_actions_json text not null,
           errors_json text not null,
@@ -79,6 +82,14 @@ def connect() -> sqlite3.Connection:
         );
         """
     )
+    for column, ddl in {
+        "fetched_url": "alter table discovery_records add column fetched_url text",
+        "fetch_attempt_count": "alter table discovery_records add column fetch_attempt_count integer not null default 0",
+        "fallback_success": "alter table discovery_records add column fallback_success integer not null default 0",
+    }.items():
+        existing = {row[1] for row in con.execute("pragma table_info(discovery_records)")}
+        if column not in existing:
+            con.execute(ddl)
     return con
 
 
@@ -110,9 +121,10 @@ def ingest(con: sqlite3.Connection, eval_data: dict, discovery_rows: list[dict])
             """
             insert or replace into discovery_records(
               run_id, url, domain, label, fetched_at, http_status, robots_allowed,
-              quality_score, agent_score, frontier_count, blocked_actions_json,
+              quality_score, agent_score, fetched_url, fetch_attempt_count,
+              fallback_success, frontier_count, blocked_actions_json,
               errors_json, record_json
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(row.get("run_id") or run_id),
@@ -124,6 +136,9 @@ def ingest(con: sqlite3.Connection, eval_data: dict, discovery_rows: list[dict])
                 1 if robots.get("allowed") else 0,
                 float(row.get("quality_score", 0)),
                 float(agent_score.get("score", 0)),
+                discovery.get("fetched_url"),
+                len(discovery.get("fetch_attempts", [])),
+                1 if discovery.get("fetched_url") and discovery.get("fetched_url") != row.get("url") else 0,
                 len(discovery.get("frontier_candidates", [])),
                 json.dumps(safety.get("blocked_actions", []), ensure_ascii=False, sort_keys=True),
                 json.dumps(row.get("errors", []), ensure_ascii=False, sort_keys=True),
@@ -144,6 +159,8 @@ def summarize(con: sqlite3.Connection, run_id: str, discovery_rows: list[dict]) 
     blocked_action_count = sum(len(row.get("safety", {}).get("blocked_actions", [])) for row in discovery_rows)
     robots_blocked_count = sum(1 for row in discovery_rows if not row.get("robots", {}).get("allowed"))
     frontier_count = sum(len(row.get("discovery", {}).get("frontier_candidates", [])) for row in discovery_rows)
+    fetch_attempt_count = sum(len(row.get("discovery", {}).get("fetch_attempts", [])) for row in discovery_rows)
+    fallback_success_count = sum(1 for row in discovery_rows if row.get("discovery", {}).get("fetched_url") and row.get("discovery", {}).get("fetched_url") != row.get("url"))
     avg_agent = sum(float(row.get("agent_score", {}).get("score", 0)) for row in discovery_rows) / total_discovery if total_discovery else 0
     historical_runs = con.execute("select count(*) from eval_runs").fetchone()[0]
 
@@ -158,6 +175,8 @@ def summarize(con: sqlite3.Connection, run_id: str, discovery_rows: list[dict]) 
         "robots_blocked_records": robots_blocked_count,
         "blocked_actions": blocked_action_count,
         "frontier_candidates": frontier_count,
+        "fetch_attempts": fetch_attempt_count,
+        "fallback_successes": fallback_success_count,
         "average_agent_score": round(avg_agent, 2),
         "historical_eval_runs": historical_runs,
     }
