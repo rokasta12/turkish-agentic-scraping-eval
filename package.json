@@ -6,9 +6,10 @@
   "scripts": {
     "eval": "tsx src/eval.ts",
     "discover:tr": "tsx src/discovery/runner.ts",
+    "db:check": "python3 scripts/db_check.py",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "test": "npm run typecheck && npm run eval && npm run discover:tr"
+    "test": "npm run typecheck && npm run eval && npm run discover:tr && npm run db:check"
   },
   "keywords": [
     "playwright",

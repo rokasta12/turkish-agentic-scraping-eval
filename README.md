@@ -60,6 +60,7 @@ npx playwright install --with-deps chromium
 npm run typecheck
 npm run eval
 npm run discover:tr
+npm run db:check
 ```
 
 Full local check:
@@ -73,7 +74,8 @@ npm test
 - `npm run typecheck` — TypeScript type check.
 - `npm run eval` — run executable research evals.
 - `npm run discover:tr` — run safe Turkish website metadata discovery.
-- `npm test` — typecheck + eval + discovery.
+- `npm run db:check` — ingest latest reports into a local SQLite health database and fail on unsafe/failing state.
+- `npm test` — typecheck + eval + discovery + database check.
 
 ## Generated outputs
 
@@ -88,6 +90,7 @@ reports/eval-results.json
 reports/github-landscape.json
 reports/discovery/tr-discovery-summary.md
 reports/discovery/tr-discovery-results.jsonl
+reports/state/eval.sqlite
 ```
 
 ## Safety policy
