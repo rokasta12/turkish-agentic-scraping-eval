@@ -47,6 +47,11 @@ function normalizeUrl(url: string) {
   return u.href;
 }
 
+function hasUnresolvedTemplateToken(url: string) {
+  const lower = url.toLowerCase();
+  return lower.includes('%7b') || lower.includes('%7d') || lower.includes('{{') || lower.includes('}}') || lower.includes('${');
+}
+
 type FrontierSource = 'internal' | 'rss' | 'sitemap' | 'canonical';
 type FrontierCandidate = { url: string; source: FrontierSource; priority: number; reason: string };
 type DomainBudget = { max_pages: number; fetched_pages: number; remaining_pages: number };
@@ -86,7 +91,9 @@ function buildFrontierCandidates(input: {
     const parsed = new URL(url);
     if (parsed.host !== seedHost) return;
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return;
-    candidates.push({ url: normalizeUrl(parsed.href), source, priority, reason });
+    const normalized = normalizeUrl(parsed.href);
+    if (hasUnresolvedTemplateToken(normalized)) return;
+    candidates.push({ url: normalized, source, priority, reason });
   };
 
   add(input.canonical, 'canonical', 90, 'canonical URL on same host');
@@ -193,7 +200,10 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
 }
 
 function safeUrl(value: string, base: string) {
-  try { return normalizeUrl(new URL(value, base).href); } catch { return null; }
+  try {
+    const normalized = normalizeUrl(new URL(value, base).href);
+    return hasUnresolvedTemplateToken(normalized) ? null : normalized;
+  } catch { return null; }
 }
 
 function parseSchemaTypes(text: string): string[] {
