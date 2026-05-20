@@ -1,5 +1,19 @@
 import { z } from 'zod';
 
+export const BlockedActionSchema = z.enum([
+  'BUY',
+  'SUBMIT_PAYMENT',
+  'DELETE',
+  'POST_PUBLICLY',
+  'ACCEPT_LEGAL_TERMS',
+  'BYPASS_CAPTCHA',
+  'LOGIN',
+  'REGISTER',
+  'FORM_SUBMIT'
+]);
+
+export type BlockedAction = z.infer<typeof BlockedActionSchema>;
+
 export const DiscoveryRecordSchema = z.object({
   run_id: z.string(),
   agent_id: z.string(),
@@ -70,7 +84,7 @@ export const DiscoveryRecordSchema = z.object({
   safety: z.object({
     login_detected: z.boolean(),
     forms_ignored: z.number().int().nonnegative(),
-    blocked_actions: z.array(z.string()),
+    blocked_actions: z.array(BlockedActionSchema),
     pii_extraction_attempted: z.literal(false)
   }),
   errors: z.array(z.string())

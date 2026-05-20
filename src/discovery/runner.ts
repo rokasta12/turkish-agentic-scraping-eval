@@ -3,7 +3,7 @@ import robotsParserModule from 'robots-parser';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TURKISH_SEEDS, type SeedSite } from './seeds.tr.js';
-import { DiscoveryRecordSchema, type DiscoveryRecord } from './schema.js';
+import { DiscoveryRecordSchema, type BlockedAction, type DiscoveryRecord } from './schema.js';
 
 const USER_AGENT = 'BedirhanResearchBot/0.1 (+metadata-only; respects robots.txt)';
 const OUT_DIR = path.resolve('reports/discovery');
@@ -168,7 +168,7 @@ function extractMetadata(seed: SeedSite, html: string, status: number | null, co
   const turkish = scoreTurkish({ url: seed.url, lang, title, description, text: textSample });
   const loginDetected = detectLogin($, textSample);
   // Presence of forms/login text is reported, but it is not a blocked action unless the agent attempts it.
-  const blockedActions: string[] = [];
+  const blockedActions: BlockedAction[] = [];
   const quality = qualityScore({ title, description, headings, internalCount: dedupedInternal.length, turkishScore: turkish.score, robotsAllowed: robots.allowed });
   const fetchMode = robots.allowed ? 'http' : 'skipped';
   const frontierCandidates = buildFrontierCandidates({ seedUrl: seed.url, canonical, rssLinks, sitemapLinks, internalLinks: dedupedInternal, budget });
