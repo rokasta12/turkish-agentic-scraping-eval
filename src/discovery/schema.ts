@@ -66,7 +66,7 @@ export const DiscoveryRecordSchema = z.object({
     frontier_candidates: z.array(z.object({
       url: z.string().url(),
       source: z.enum(['internal', 'rss', 'sitemap', 'canonical']),
-      priority: z.number().min(0).max(100),
+      priority: z.number().int().min(0).max(100),
       reason: z.string()
     })),
     page_type_guess: PageTypeGuessSchema
