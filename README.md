@@ -150,6 +150,7 @@ It checks a seed list of public Turkish/Turkey-oriented sites, then extracts onl
 - bounded same-domain frontier candidates
 - fetch attempt diagnostics and safe sitemap/RSS fallback attempts
 - total fetch-attempt count in the human summary
+- robots fetch error count in the human summary
 - per-domain crawl budget
 - safe-agent score
 - RSS/sitemap hints
