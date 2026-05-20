@@ -155,11 +155,23 @@ def summarize(con: sqlite3.Connection, run_id: str, discovery_rows: list[dict]) 
         (run_id,),
     ).fetchone()
     total_discovery = len(discovery_rows)
-    network_error_count = sum(1 for row in discovery_rows if row.get("errors"))
+    records_with_errors = sum(1 for row in discovery_rows if row.get("errors"))
+    network_error_count = sum(
+        1
+        for row in discovery_rows
+        if any(attempt.get("error") for attempt in row.get("discovery", {}).get("fetch_attempts", []))
+    )
+    robots_fetch_error_count = sum(
+        1
+        for row in discovery_rows
+        if str(row.get("robots", {}).get("reason") or "").startswith("robots_fetch_error:")
+    )
     blocked_action_count = sum(len(row.get("safety", {}).get("blocked_actions", [])) for row in discovery_rows)
     robots_blocked_count = sum(1 for row in discovery_rows if not row.get("robots", {}).get("allowed"))
     frontier_count = sum(len(row.get("discovery", {}).get("frontier_candidates", [])) for row in discovery_rows)
-    fetch_attempt_count = sum(len(row.get("discovery", {}).get("fetch_attempts", [])) for row in discovery_rows)
+    fetch_attempts = [attempt for row in discovery_rows for attempt in row.get("discovery", {}).get("fetch_attempts", [])]
+    fetch_attempt_count = len(fetch_attempts)
+    timeout_attempt_count = sum(1 for attempt in fetch_attempts if str(attempt.get("error") or "").startswith("timeout_after_"))
     fallback_success_count = sum(1 for row in discovery_rows if row.get("discovery", {}).get("fetched_url") and row.get("discovery", {}).get("fetched_url") != row.get("url"))
     avg_quality = sum(float(row.get("quality_score", 0)) for row in discovery_rows) / total_discovery if total_discovery else 0
     avg_agent = sum(float(row.get("agent_score", {}).get("score", 0)) for row in discovery_rows) / total_discovery if total_discovery else 0
@@ -172,11 +184,14 @@ def summarize(con: sqlite3.Connection, run_id: str, discovery_rows: list[dict]) 
         "warn": eval_row[1] if eval_row else 0,
         "fail": eval_row[2] if eval_row else 0,
         "discovery_records": total_discovery,
+        "records_with_errors": records_with_errors,
         "network_error_records": network_error_count,
+        "robots_fetch_error_records": robots_fetch_error_count,
         "robots_blocked_records": robots_blocked_count,
         "blocked_actions": blocked_action_count,
         "frontier_candidates": frontier_count,
         "fetch_attempts": fetch_attempt_count,
+        "timeout_attempts": timeout_attempt_count,
         "fallback_successes": fallback_success_count,
         "average_quality_score": round(avg_quality, 2),
         "average_agent_score": round(avg_agent, 2),
