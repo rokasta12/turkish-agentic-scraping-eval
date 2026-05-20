@@ -12,6 +12,16 @@ export const BlockedActionSchema = z.enum([
   'FORM_SUBMIT'
 ]);
 
+export const PageTypeGuessSchema = z.enum([
+  'news_or_article',
+  'product_or_commerce',
+  'public_institution',
+  'education_or_research',
+  'news_or_announcement',
+  'index_or_listing',
+  'unknown'
+]);
+
 export type BlockedAction = z.infer<typeof BlockedActionSchema>;
 
 export const DiscoveryRecordSchema = z.object({
@@ -56,10 +66,10 @@ export const DiscoveryRecordSchema = z.object({
     frontier_candidates: z.array(z.object({
       url: z.string().url(),
       source: z.enum(['internal', 'rss', 'sitemap', 'canonical']),
-      priority: z.number(),
+      priority: z.number().min(0).max(100),
       reason: z.string()
     })),
-    page_type_guess: z.string()
+    page_type_guess: PageTypeGuessSchema
   }),
   domain_budget: z.object({
     max_pages: z.number().int().positive(),
