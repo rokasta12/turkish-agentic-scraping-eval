@@ -315,6 +315,12 @@ async function discoverSeed(seed: SeedSite): Promise<DiscoveryRecord> {
   return extractMetadata(seed, result.fetched.text.slice(0, 2_000_000), result.fetched.status, result.fetched.contentType, robots, errors, result.fetchedUrl, result.attempts);
 }
 
+function formatFailedAttempt(attempt: FetchAttempt) {
+  const status = attempt.status === null ? 'status_unavailable' : `status_${attempt.status}`;
+  const reason = attempt.error ?? (attempt.status !== null && attempt.status >= 400 ? 'http_status' : 'unknown_error');
+  return `${status} ${reason} ${attempt.url}`;
+}
+
 function renderSummary(records: DiscoveryRecord[]) {
   const pass = records.filter((r) => r.robots.allowed && r.errors.length === 0).length;
   const skipped = records.filter((r) => !r.robots.allowed).length;
@@ -337,7 +343,7 @@ function renderSummary(records: DiscoveryRecord[]) {
       const attemptSummary = r.discovery.fetch_attempts
         .filter((attempt) => attempt.error !== null || attempt.status === null || attempt.status >= 400)
         .slice(0, 3)
-        .map((attempt) => `${attempt.status ?? 'n/a'} ${attempt.error ?? 'http_status'} ${attempt.url}`)
+        .map(formatFailedAttempt)
         .join('; ');
       return `- ${r.label} (${r.domain}) — errors ${r.errors.join(', ') || 'n/a'}; attempts ${attemptSummary || 'n/a'}`;
     });
